@@ -1,0 +1,30 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ets-frontend
+  namespace: kube-ops
+  labels:
+    app: ets-frontend
+    track: stable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ets-frontend
+  template:
+    metadata:
+      labels:
+        app: ets-frontend
+        track: stable
+    spec:
+      imagePullSecrets:
+        - name: aliyun-registry
+      containers:
+      - name: ets-frontend
+        image: registry.cn-zhangjiakou.aliyuncs.com/gedewisdom/ci-ets-frontend:__VERSION__
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          protocol: TCP
+          containerPort: 5000

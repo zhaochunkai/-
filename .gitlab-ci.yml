@@ -1,0 +1,52 @@
+stages:
+  - Build
+  - Deploy
+
+Image_Build:
+  stage: Build
+  image: docker:19.03.1
+  allow_failure: false
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+    ETS_BASE_URL: http://ets.gd
+    ETS_FILE_URL: http://ets.gd
+    ETS_MESSAGE_URL: http://dev.api.msg.gedewisdom.com
+  services:
+    - name: docker:19.03.1-dind
+      command: [ "dockerd", "--host=unix:///var/run/docker.sock", "--host=tcp://0.0.0.0:2375", "--mtu=1450","--insecure-registry=registry.cn-zhangjiakou.aliyuncs.com","--registry-mirror=https://i1awx5i0.mirror.aliyuncs.com"]
+  before_script:
+    - docker info
+  script:
+    - echo 'nameserver 223.5.5.5' >> cat /etc/resolv.conf
+    - sed -i "s|__BASE_URL__|${ETS_BASE_URL}|" ./src/config.js
+    - sed -i "s|__FILE_URL__|${ETS_FILE_URL}|" ./src/config.js
+    - sed -i "s|__MESSAGE_URL__|${ETS_MESSAGE_URL}|" ./src/config.js
+    - cat ./src/config.js
+    - docker login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" registry.cn-zhangjiakou.aliyuncs.com
+    - docker build -t "${CI_REGISTRY_IMAGE}:latest" -f Deploy.dockerfile .
+    - docker tag "${CI_REGISTRY_IMAGE}:latest" "${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}"
+    - test ! -z "${CI_COMMIT_TAG}" && docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}"
+    - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}"
+
+Internal-Deploy:
+  image: bitnami/kubectl:1.16
+  stage: Deploy
+  when: on_success
+  script:
+    - kubectl version
+    - cd manifests/
+    - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__VERSION__/${CI_COMMIT_REF_NAME}/" deployment.yaml ingress.yaml service.yaml
+    - |
+      if kubectl apply -f deployment.yaml | grep -q unchanged; then
+          echo "=> Patching deployment to force image update."
+          kubectl patch -f deployment.yaml -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ci-last-updated\":\"$(date +'%s')\"}}}}}"
+      else
+          echo "=> Deployment apply has changed the object, no need to force image update."
+      fi
+    - kubectl apply -f service.yaml || true
+    - kubectl apply -f ingress.yaml
+    - kubectl rollout status -f deployment.yaml
+    - kubectl get all,ing -l ref=${CI_ENVIRONMENT_SLUG}
